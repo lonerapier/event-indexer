@@ -1,42 +1,29 @@
-# Advanced Sample Hardhat Project
+# ERC20 event indexer
 
-This project demonstrates an advanced Hardhat use case, integrating other tools commonly used alongside Hardhat in the ecosystem.
+This is an ERC20 event indexer that indexes all past `Transfer` event emitted by the contract and listens for new events.
+Chain re-org possibility is considered through `changed` and events are marked `removed` in the db.
 
-The project comes with a sample contract, a test for that contract, a sample script that deploys that contract, and an example of a task implementation, which simply lists the available accounts. It also comes with a variety of other tools, preconfigured to work with the project code.
+Uses **mongodb** as the prefered choice due to its flexibility and easy setup.
 
-Try running some of the following tasks:
+## Steps
 
-```shell
-npx hardhat accounts
-npx hardhat compile
-npx hardhat clean
-npx hardhat test
-npx hardhat node
-npx hardhat help
-REPORT_GAS=true npx hardhat test
-npx hardhat coverage
-npx hardhat run scripts/deploy.js
-node scripts/deploy.js
-npx eslint '**/*.js'
-npx eslint '**/*.js' --fix
-npx prettier '**/*.{json,sol,md}' --check
-npx prettier '**/*.{json,sol,md}' --write
-npx solhint 'contracts/**/*.sol'
-npx solhint 'contracts/**/*.sol' --fix
-```
+-
 
-# Etherscan verification
+## Sample Addresses
 
-To try out Etherscan verification, you first need to deploy a contract to an Ethereum network that's supported by Etherscan, such as Ropsten.
+- `0x532B02398ceBB887b7ED5Ea87C50657b2cE1f3dC`
+- `0xb91ed7E04Bd21383FA3270bEe8081fb06a5277C5`
+- `0xb08aa0e20a4aebc8e2b99d3247975d1c02959cfd`
+- `0x85086C563CD761Bc6E506bDABd309714316eF60f`
+- `0xaD6D458402F60fD3Bd25163575031ACDce07538D`
 
-In this project, copy the .env.example file to a file named .env, and then edit it to fill in the details. Enter your Etherscan API key, your Ropsten node URL (eg from Alchemy), and the private key of the account which will send the deployment transaction. With a valid .env file in place, first deploy your contract:
+## Setup
 
 ```shell
-hardhat run --network ropsten scripts/deploy.js
+npx hardhat run scripts/indexer.js --network ropsten
 ```
 
-Then, copy the deployment address and paste it in to replace `DEPLOYED_CONTRACT_ADDRESS` in this command:
+## Acknowledgements
 
-```shell
-npx hardhat verify --network ropsten DEPLOYED_CONTRACT_ADDRESS "Hello, Hardhat!"
-```
+- [3 ways to subscribe to events](https://www.coinclarified.com/p/3-ways-to-subscribe-to-events-with-web3-js/)
+- [Web3.js documentation](https://web3js.readthedocs.io/en/v1.2.11/web3-eth.html)

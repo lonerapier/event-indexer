@@ -57,7 +57,7 @@ async function getPastContractEvents(erc20Addresses, blockNumber) {
                             removed: log.removed,
                         });
                     });
-                    console.log("inserting", insertLogs.length, "logs");
+                    // console.log("inserting", insertLogs.length, "logs");
                     if (insertLogs.length > 0)
                         db.collection("events")
                             .insertMany(insertLogs, { ordered: false })

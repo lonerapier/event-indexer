@@ -29,11 +29,11 @@ async function getPastContractEvents(erc20Addresses, blockNumber) {
         const db = await getDb();
 
         const pageEvents = 5000;
-        let startBlock = 0;
+        let startBlock = 10000000;
 
         console.log("indexing past Transfer events");
         while (startBlock < blockNumber) {
-            console.log(startBlock);
+            // console.log(startBlock, blockNumber);
             web3http.eth
                 .getPastLogs({
                     address: erc20Addresses,
@@ -57,6 +57,7 @@ async function getPastContractEvents(erc20Addresses, blockNumber) {
                             removed: log.removed,
                         });
                     });
+                    console.log("inserting", insertLogs.length, "logs");
                     if (insertLogs.length > 0)
                         db.collection("events")
                             .insertMany(insertLogs, { ordered: false })

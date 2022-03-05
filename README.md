@@ -7,7 +7,10 @@ Uses **mongodb** as the prefered choice due to its flexibility and easy setup.
 
 ## Steps
 
--
+- run script in a terminal
+- indexes all past events of the contracts list supplied
+- listens for new event emitted
+- listens for deletion of event due to chain re-orgs and add flag to db document
 
 ## Sample Addresses
 

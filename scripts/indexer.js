@@ -14,31 +14,45 @@ const client = new MongoClient(process.env.MONGO_URL);
 
 const transfer = web3http.utils.keccak256("Transfer(address,address,uint256)");
 
-async function getDb() {
-    return client.db(process.env.DB_NAME);
-}
+// For better error handling
+// https://community.infura.io/t/invalid-json-rpc-response-error/1281
+const XHR = require("xhr2-cookies").XMLHttpRequest;
+XHR.prototype._onHttpRequestError = function (request, error) {
+    if (this._request !== request) {
+        return;
+    }
+    // A new line
+    console.log(error, "request");
+    this._setError();
+    request.abort();
+    this._setReadyState(XHR.DONE);
+    this._dispatchProgress("error");
+    this._dispatchProgress("loadend");
+};
+
+// async function getDb() {
+//     return client.db(process.env.DB_NAME);
+// }
+
+const db = client.db(process.env.DB_NAME);
 
 /**
  * @summary get past events
  * @description get past events of all addresses paginated by block number
+ * Uses Divide & Conquer algo to divide blocks if there are too many events, saves JSON-RPC api calls
  * @param {array} erc20Addresses
- * @param {number} blockNumber
+ * @param {number} fromBlock
+ * @param {number} toBlock
  */
-async function getPastContractEvents(erc20Addresses, blockNumber) {
+async function getPastContractEvents(erc20Addresses, fromBlock, toBlock) {
     try {
-        const db = await getDb();
-
-        const pageEvents = 5000;
-        let startBlock = 10000000;
-
-        console.log("indexing past Transfer events");
-        while (startBlock < blockNumber) {
-            // console.log(startBlock, blockNumber);
-            web3http.eth
+        if (fromBlock <= toBlock) {
+            console.log(fromBlock, toBlock);
+            await web3http.eth
                 .getPastLogs({
                     address: erc20Addresses,
-                    fromBlock: startBlock,
-                    toBlock: startBlock + pageEvents,
+                    fromBlock: fromBlock,
+                    toBlock: toBlock,
                     topics: [transfer],
                 })
                 .then((logs) => {
@@ -57,16 +71,20 @@ async function getPastContractEvents(erc20Addresses, blockNumber) {
                             removed: log.removed,
                         });
                     });
-                    // console.log("inserting", insertLogs.length, "logs");
+                    console.log("inserting", insertLogs.length, "logs");
                     if (insertLogs.length > 0)
                         db.collection("events")
                             .insertMany(insertLogs, { ordered: false })
                             .catch(() => {});
                 });
-            startBlock += pageEvents;
         }
     } catch (error) {
-        console.log(error);
+        // console.log(error);
+
+        // Use Divide & Conquer to get past events
+        const midBlock = (fromBlock + toBlock) >> 1;
+        await getPastContractEvents(erc20Addresses, fromBlock, midBlock);
+        await getPastContractEvents(erc20Addresses, midBlock + 1, toBlock);
     }
 }
 
@@ -78,7 +96,7 @@ async function getPastContractEvents(erc20Addresses, blockNumber) {
 async function listenForNewEvents(contractAddress) {
     try {
         const contract = new web3ws.eth.Contract(abi, contractAddress);
-        const db = await getDb();
+        // const db = await getDb();
 
         contract.events
             .Transfer({
@@ -126,8 +144,10 @@ async function listen(erc20Addresses) {
         const blockNumber = await web3http.eth.getBlockNumber();
         console.log("blockNumber:", blockNumber);
 
+        console.log("indexing past Transfer events");
+
         // get past events
-        getPastContractEvents(erc20Addresses, blockNumber);
+        getPastContractEvents(erc20Addresses, 0, blockNumber);
 
         // listen for new events for all addresses
         for (let i = 0; i < erc20Addresses.length; i++) {

@@ -30,3 +30,4 @@ npx hardhat run scripts/indexer.js --network ropsten
 
 - [3 ways to subscribe to events](https://www.coinclarified.com/p/3-ways-to-subscribe-to-events-with-web3-js/)
 - [Web3.js documentation](https://web3js.readthedocs.io/en/v1.2.11/web3-eth.html)
+- [D&C algo](https://ethereum.stackexchange.com/questions/79672/how-do-i-get-all-logs-for-all-time-for-a-given-contract-using-web3)

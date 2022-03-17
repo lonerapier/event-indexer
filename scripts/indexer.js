@@ -1,16 +1,12 @@
 require("dotenv").config();
 const { MongoClient } = require("mongodb");
 const Web3 = require("web3");
-const abi =
-    require("../artifacts/contracts/SampleToken.sol/SampleToken.json").abi;
 const web3ws = new Web3(
     new Web3.providers.WebsocketProvider(process.env.ROPSTEN_WEBSOCKET_URL)
 );
 const web3http = new Web3(
     new Web3.providers.HttpProvider(process.env.ROPSTEN_HTTP_URL)
 );
-
-const client = new MongoClient(process.env.MONGO_URL);
 
 const transfer = web3http.utils.keccak256("Transfer(address,address,uint256)");
 
@@ -30,21 +26,36 @@ XHR.prototype._onHttpRequestError = function (request, error) {
     this._dispatchProgress("loadend");
 };
 
-// async function getDb() {
-//     return client.db(process.env.DB_NAME);
-// }
-
-const db = client.db(process.env.DB_NAME);
+function getLogs(logs) {
+    return {
+        _id: logs.id,
+        address: logs.address,
+        blockNumber: logs.blockNumber,
+        blockHash: logs.blockHash,
+        transactionHash: logs.transactionHash,
+        transactionIndex: logs.transactionIndex,
+        from: logs.topics[1],
+        to: logs.topics[2],
+        value: web3http.utils.hexToNumberString(logs.data),
+        removed: logs.removed,
+    };
+}
 
 /**
  * @summary get past events
  * @description get past events of all addresses paginated by block number
  * Uses Divide & Conquer algo to divide blocks if there are too many events, saves JSON-RPC api calls
+ * @param {object} collection
  * @param {array} erc20Addresses
  * @param {number} fromBlock
  * @param {number} toBlock
  */
-async function getPastContractEvents(erc20Addresses, fromBlock, toBlock) {
+async function getPastContractEvents(
+    collection,
+    erc20Addresses,
+    fromBlock,
+    toBlock
+) {
     try {
         if (fromBlock <= toBlock) {
             console.log(fromBlock, toBlock);
@@ -58,24 +69,14 @@ async function getPastContractEvents(erc20Addresses, fromBlock, toBlock) {
                 .then((logs) => {
                     const insertLogs = [];
                     logs.forEach((log) => {
-                        insertLogs.push({
-                            _id: log.id,
-                            address: log.address,
-                            blockNumber: log.blockNumber,
-                            blockHash: log.blockHash,
-                            transactionHash: log.transactionHash,
-                            transactionIndex: log.transactionIndex,
-                            from: log.topics[1],
-                            to: log.topics[2],
-                            value: web3http.utils.hexToNumberString(log.data),
-                            removed: log.removed,
-                        });
+                        insertLogs.push(getLogs(log));
                     });
-                    console.log("inserting", insertLogs.length, "logs");
-                    if (insertLogs.length > 0)
-                        db.collection("events")
+                    if (insertLogs.length > 0) {
+                        console.log("inserting", insertLogs.length, "logs");
+                        collection
                             .insertMany(insertLogs, { ordered: false })
                             .catch(() => {});
+                    }
                 });
         }
     } catch (error) {
@@ -83,49 +84,49 @@ async function getPastContractEvents(erc20Addresses, fromBlock, toBlock) {
 
         // Use Divide & Conquer to get past events
         const midBlock = (fromBlock + toBlock) >> 1;
-        await getPastContractEvents(erc20Addresses, fromBlock, midBlock);
-        await getPastContractEvents(erc20Addresses, midBlock + 1, toBlock);
+        await getPastContractEvents(
+            collection,
+            erc20Addresses,
+            fromBlock,
+            midBlock
+        );
+        await getPastContractEvents(
+            collection,
+            erc20Addresses,
+            midBlock + 1,
+            toBlock
+        );
     }
 }
 
 /**
  * @summary listen for new events
  * @dev looks for chain re-orgs with `changed`
- * @param {string} contractAddress
+ * @param {object} collection
+ * @param {array} erc20Addresses
  */
-async function listenForNewEvents(contractAddress) {
+async function listenForNewEvents(collection, erc20Addresses) {
     try {
-        const contract = new web3ws.eth.Contract(abi, contractAddress);
-        // const db = await getDb();
-
-        contract.events
-            .Transfer({
+        web3ws.eth
+            .subscribe("logs", {
                 fromBlock: "latest",
+                address: erc20Addresses,
+                topics: [transfer],
             })
-            .on("data", (event) => {
-                console.log(event);
-                db.collection("events").insertOne({
-                    _id: event.id,
-                    address: contractAddress,
-                    transactionIndex: event.transactionIndex,
-                    transactionHash: event.transactionHash,
-                    blockNumber: event.blockNumber,
-                    blockHash: event.blockHash,
-                    from: event.returnValues.from,
-                    to: event.returnValues.to,
-                    value: event.returnValues.value,
-                    removed: false,
-                });
-            })
-            .on("changed", (changed) => {
-                console.log(changed);
-                db.collection("events").updateOne(
-                    { _id: changed.id },
-                    { $set: { removed: true } }
+            .on("data", (log) => {
+                collection.updateOne(
+                    { _id: log.id },
+                    { $set: getLogs(log) },
+                    { upsert: true }
                 );
             })
-            .on("error", (error) => {
-                console.log(error);
+            .on("changed", (log) => {
+                console.log("reorged event", log.id);
+                collection.updateOne(
+                    { _id: log.id },
+                    { $set: getLogs(log) },
+                    { upsert: true }
+                );
             });
     } catch (error) {
         console.log(error);
@@ -134,46 +135,53 @@ async function listenForNewEvents(contractAddress) {
 
 /**
  * @summary listen for past and new events
+ * @param {object} collection
  * @param {array} erc20Addresses
  */
-async function listen(erc20Addresses) {
+async function listen(collection, erc20Addresses) {
     try {
-        await client.connect();
-
         // get block number
         const blockNumber = await web3http.eth.getBlockNumber();
         console.log("blockNumber:", blockNumber);
 
-        console.log("indexing past Transfer events");
-
         // get past events
-        getPastContractEvents(erc20Addresses, 0, blockNumber);
+        console.log("indexing past Transfer events");
+        getPastContractEvents(collection, erc20Addresses, 0, blockNumber);
 
-        // listen for new events for all addresses
-        for (let i = 0; i < erc20Addresses.length; i++) {
-            console.log(
-                "listening for events on contract",
-                i,
-                erc20Addresses[i]
-            );
-
-            listenForNewEvents(erc20Addresses[i]);
-        }
+        // listen for new events
+        console.log("listening for new Transfer events");
+        listenForNewEvents(collection, erc20Addresses);
     } catch (error) {
         console.log(error);
     }
 }
 
 async function main() {
-    const erc20Addresses = [
-        "0x532B02398ceBB887b7ED5Ea87C50657b2cE1f3dC",
-        "0xb91ed7E04Bd21383FA3270bEe8081fb06a5277C5",
-        "0xb08aa0e20a4aebc8e2b99d3247975d1c02959cfd",
-        "0x85086C563CD761Bc6E506bDABd309714316eF60f",
-        "0xaD6D458402F60fD3Bd25163575031ACDce07538D",
-    ];
+    try {
+        const erc20Addresses = [
+            "0x532B02398ceBB887b7ED5Ea87C50657b2cE1f3dC",
+            "0xc778417E063141139Fce010982780140Aa0cD5Ab",
+            "0xb08aa0e20a4aebc8e2b99d3247975d1c02959cfd",
+            "0x31F42841c2db5173425b5223809CF3A38FEde360",
+            "0xaD6D458402F60fD3Bd25163575031ACDce07538D",
+            "0xC01D99D33b96e904aCA9B76aa71442eCCf496d82",
+        ];
 
-    await listen(erc20Addresses);
+        // connect to db, create collection and create indexes
+        MongoClient.connect(process.env.MONGO_URL, async (err, db) => {
+            if (err) throw err;
+            const collection = db.db(process.env.DB_NAME).collection("events");
+            collection.createIndexes([
+                { key: { address: 1 } },
+                { key: { from: 1 } },
+                { key: { to: 1 } },
+                { key: { blockNumber: -1 } },
+            ]);
+            await listen(collection, erc20Addresses);
+        });
+    } catch (error) {
+        console.log(error);
+    }
 }
 
 main();

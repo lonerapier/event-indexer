@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { MongoClient } = require("mongodb");
+const { getDb, eventModel } = require("../db/conn");
 const Web3 = require("web3");
 const web3ws = new Web3(
     new Web3.providers.WebsocketProvider(process.env.ROPSTEN_WEBSOCKET_URL)
@@ -9,6 +9,15 @@ const web3http = new Web3(
 );
 
 const transfer = web3http.utils.keccak256("Transfer(address,address,uint256)");
+
+const erc20Addresses = [
+    "0x532B02398ceBB887b7ED5Ea87C50657b2cE1f3dC",
+    "0xc778417E063141139Fce010982780140Aa0cD5Ab",
+    "0xb08aa0e20a4aebc8e2b99d3247975d1c02959cfd",
+    "0x31F42841c2db5173425b5223809CF3A38FEde360",
+    "0xaD6D458402F60fD3Bd25163575031ACDce07538D",
+    "0xC01D99D33b96e904aCA9B76aa71442eCCf496d82",
+];
 
 // For better error handling
 // https://community.infura.io/t/invalid-json-rpc-response-error/1281
@@ -45,17 +54,10 @@ function getLogs(logs) {
  * @summary get past events
  * @description get past events of all addresses paginated by block number
  * Uses Divide & Conquer algo to divide blocks if there are too many events, saves JSON-RPC api calls
- * @param {object} collection
- * @param {array} erc20Addresses
  * @param {number} fromBlock
  * @param {number} toBlock
  */
-async function getPastContractEvents(
-    collection,
-    erc20Addresses,
-    fromBlock,
-    toBlock
-) {
+async function getPastContractEvents(fromBlock, toBlock) {
     try {
         if (fromBlock <= toBlock) {
             console.log(fromBlock, toBlock);
@@ -73,9 +75,15 @@ async function getPastContractEvents(
                     });
                     if (insertLogs.length > 0) {
                         console.log("inserting", insertLogs.length, "logs");
-                        collection
-                            .insertMany(insertLogs, { ordered: false })
-                            .catch(() => {});
+                        eventModel.bulkWrite(
+                            insertLogs.map((log) => ({
+                                updateOne: {
+                                    filter: { _id: log._id },
+                                    update: { $set: log },
+                                    upsert: true,
+                                },
+                            }))
+                        );
                     }
                 });
         }
@@ -84,28 +92,16 @@ async function getPastContractEvents(
 
         // Use Divide & Conquer to get past events
         const midBlock = (fromBlock + toBlock) >> 1;
-        await getPastContractEvents(
-            collection,
-            erc20Addresses,
-            fromBlock,
-            midBlock
-        );
-        await getPastContractEvents(
-            collection,
-            erc20Addresses,
-            midBlock + 1,
-            toBlock
-        );
+        await getPastContractEvents(fromBlock, midBlock);
+        await getPastContractEvents(midBlock + 1, toBlock);
     }
 }
 
 /**
  * @summary listen for new events
  * @dev looks for chain re-orgs with `changed`
- * @param {object} collection
- * @param {array} erc20Addresses
  */
-async function listenForNewEvents(collection, erc20Addresses) {
+async function listenForNewEvents() {
     try {
         web3ws.eth
             .subscribe("logs", {
@@ -114,7 +110,7 @@ async function listenForNewEvents(collection, erc20Addresses) {
                 topics: [transfer],
             })
             .on("data", (log) => {
-                collection.updateOne(
+                eventModel.updateOne(
                     { _id: log.id },
                     { $set: getLogs(log) },
                     { upsert: true }
@@ -122,7 +118,7 @@ async function listenForNewEvents(collection, erc20Addresses) {
             })
             .on("changed", (log) => {
                 console.log("reorged event", log.id);
-                collection.updateOne(
+                eventModel.updateOne(
                     { _id: log.id },
                     { $set: getLogs(log) },
                     { upsert: true }
@@ -130,15 +126,18 @@ async function listenForNewEvents(collection, erc20Addresses) {
             });
     } catch (error) {
         console.log(error);
+
+        const currBlock = web3http.eth.getBlockNumber();
+        getPastContractEvents(currBlock - 100, currBlock);
+        listenForNewEvents();
     }
 }
 
 /**
  * @summary listen for past and new events
  * @param {object} collection
- * @param {array} erc20Addresses
  */
-async function listen(collection, erc20Addresses) {
+async function listen() {
     try {
         // get block number
         const blockNumber = await web3http.eth.getBlockNumber();
@@ -146,11 +145,11 @@ async function listen(collection, erc20Addresses) {
 
         // get past events
         console.log("indexing past Transfer events");
-        getPastContractEvents(collection, erc20Addresses, 0, blockNumber);
+        getPastContractEvents(0, blockNumber);
 
         // listen for new events
         console.log("listening for new Transfer events");
-        listenForNewEvents(collection, erc20Addresses);
+        listenForNewEvents();
     } catch (error) {
         console.log(error);
     }
@@ -158,30 +157,13 @@ async function listen(collection, erc20Addresses) {
 
 async function main() {
     try {
-        const erc20Addresses = [
-            "0x532B02398ceBB887b7ED5Ea87C50657b2cE1f3dC",
-            "0xc778417E063141139Fce010982780140Aa0cD5Ab",
-            "0xb08aa0e20a4aebc8e2b99d3247975d1c02959cfd",
-            "0x31F42841c2db5173425b5223809CF3A38FEde360",
-            "0xaD6D458402F60fD3Bd25163575031ACDce07538D",
-            "0xC01D99D33b96e904aCA9B76aa71442eCCf496d82",
-        ];
-
-        // connect to db, create collection and create indexes
-        MongoClient.connect(process.env.MONGO_URL, async (err, db) => {
-            if (err) throw err;
-            const collection = db.db(process.env.DB_NAME).collection("events");
-            collection.createIndexes([
-                { key: { address: 1 } },
-                { key: { from: 1 } },
-                { key: { to: 1 } },
-                { key: { blockNumber: -1 } },
-            ]);
-            await listen(collection, erc20Addresses);
+        const db = getDb();
+        db.once("open", async function () {
+            await listen();
         });
     } catch (error) {
         console.log(error);
     }
 }
 
-main();
+main().catch(console.error);

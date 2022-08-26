@@ -36,6 +36,6 @@
     "xhr2-cookies": "^1.1.0"
   },
   "dependencies": {
-    "mongoose": "^6.2.8"
+    "mongoose": "^6.4.6"
   }
 }
